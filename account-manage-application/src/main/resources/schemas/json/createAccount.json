@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft/2019-09/schema#",
+  "type": "object",
+  "properties": {
+    "accountType": {
+      "type": "string",
+      "enum": ["D", "C"]
+    },
+    "idCustomer": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idCurrency": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": ["accountType", "idCustomer", "idCurrency"],
+  "additionalProperties": false
+}

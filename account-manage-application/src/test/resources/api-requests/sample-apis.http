@@ -1,0 +1,40 @@
+
+### Crear un pedido
+POST http://localhost:8080/pedidos/crear
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "productoId": 1,
+      "cantidad": 1
+    }
+  ],
+  "comentarios": "1"
+}
+
+### Consultar pedido
+GET http://localhost:8080/pedidos/5f640775-be9c-49dc-9e1f-0bcd9dc08204
+
+### Modificar pedido
+POST http://localhost:8080/pedidos/modificar/03d914af-8ad5-4cd2-9a8e-a2ee9889241d
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "productoId": 1,
+      "cantidad": 1
+    },{
+      "productoId": 2,
+      "cantidad": 1
+    }
+  ],
+  "comentarios": "string"
+}
+
+### Cancelar un pedido
+POST http://localhost:8080/pedidos/cancelar/03d914af-8ad5-4cd2-9a8e-a2ee9889241d
+
+### Finalizar un pedido
+POST http://localhost:8080/pedidos/finalizar/03d914af-8ad5-4cd2-9a8e-a2ee9889241d

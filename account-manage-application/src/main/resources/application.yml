@@ -1,0 +1,13 @@
+server:
+  port: ${app.port:8080}
+
+spring:
+  output:
+    ansi:
+      enabled: always
+  application:
+    name: account-manage
+  profiles:
+    active: ${environment.profile}
+  config:
+    import: optional:configserver:${SPRING_CLOUD_CONFIG_ADDRESS}

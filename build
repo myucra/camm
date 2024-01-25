@@ -1,0 +1,13 @@
+#!/bin/sh
+
+if test "$1" == "install"; then
+  mvn clean install -DskipTests -Dspotbugs.skip=true -Dcheckstyle.skip
+elif test "$1" == "check"; then
+  mvn checkstyle:checkstyle -Dspotbugs.skip=true
+  mvn compile spotbugs:check -Dcheckstyle.skip
+elif test "$1" == "test"; then
+  mvn test -Dspotbugs.skip=true -Dcheckstyle.skip
+  mvn failsafe:integration-test -Dspotbugs.skip=true -Dcheckstyle.skip
+else
+  echo "Use params 'install', 'test' or 'check'"
+fi

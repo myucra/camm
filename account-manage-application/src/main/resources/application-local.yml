@@ -1,0 +1,19 @@
+server:
+  port: ${app.port:8080}
+
+spring:
+  output:
+    ansi:
+      enabled: always
+  application:
+    name: account-manage
+  config:
+    import: optional:configserver:${SPRING_CLOUD_CONFIG_ADDRESS}
+management:
+  endpoint:
+    health:
+      show-details: ALWAYS
+  endpoints:
+    web:
+      exposure:
+        include: '*'

@@ -1,0 +1,200 @@
+variables:
+  APPLICATION_NAME: "account-manage"
+  RUNNER_IMAGE: "maven:3.9.4-eclipse-temurin-17-alpine"
+  BUILDER_IMAGE: "bisaaccount/vulnerability-scanning:1.0.0"
+  DEPLOY_IMAGE: "alpine/git:v2.26.2"
+
+  CONFIGURATION_SERVER_URL: "http://configuration-server-backend-develop.apps.bisadodev01.grupobisa.net/account-manage-dev.json"
+
+  TARGET_ENVIRONMENT: "develop"
+
+  NAMESPACE: "${APPLICATION_NAME}-${TARGET_ENVIRONMENT}"
+
+  REGISTRY_SERVER: "default-route-openshift-image-registry.apps.bisadodev01.grupobisa.net"
+
+  MANIFESTS_BRANCH: "develop"
+  MANIFESTS_REPO: "https://${GITLAB_USERNAME}:${GITLAB_PASSWORD}@w0gitcicd01.grupobisa.net/manifests/manifests-account-manage.git"
+  MANIFESTS_DIR: "manifests-${APPLICATION_NAME}"
+
+  VERSION: ""
+  ARTIFACT_URL: ""
+
+  RUNNER_IMAGE_ARGO: "argoproj/argocd"
+  ARGOCD_URL: "openshift-gitops-server-openshift-gitops.apps.bisadodev01.grupobisa.net"
+  ARGOCD_USER: "admin"
+
+  DOCKER_USER: "bisaaccount"
+
+default:
+  before_script:
+    - export VERSION="$(cat application.version)"
+    - export ARTIFACT_URL=$REGISTRY_SERVER/$NAMESPACE/$APPLICATION_NAME:$VERSION
+    - export MAVEN_ARGS="-s .m2/settings.xml --batch-mode --no-transfer-progress -T 2"
+
+stages:
+  - building
+  - testing
+  - review-artifact
+  - deploy
+  - sync
+
+build:
+  image: $RUNNER_IMAGE
+  stage: building
+  retry: 2
+  tags:
+    - dev-openshift
+  only:
+    - develop
+  script:
+    - mkdir -p target/config-server
+    - java -jar ./lib/commons-ci-pipeline-2.1.1.jar -v -j -s assets/schemas/config-server-definition.json -l $CONFIGURATION_SERVER_URL -o target/config-server
+    - java -jar ./lib/commons-ci-pipeline-2.1.1.jar -w -d . -n application.yml -e \(\$\\{SPRING_CLOUD_CONFIG_ADDRESS\\}\) -c $CONFIGURATION_SERVER_URL
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-lang-2.1.1.jar
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-dsl-2.1.1.jar
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-spring-2.1.1.jar
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-tracing-2.1.1.jar
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-tracing-opentelemetry-2.1.1.jar
+    - mvn org.apache.maven.plugins:maven-install-plugin:2.5.2:install-file -Dfile=./lib/commons-as400-2.1.1.jar
+    - mvn --quiet dependency:go-offline install -DskipTests -Dspotbugs.skip=true -Dcheckstyle.skip
+  artifacts:
+    paths:
+      - ./.m2
+      - ./**/application.yml
+      - ./**/target
+
+static-test:
+  image: $RUNNER_IMAGE
+  stage: testing
+  retry: 2
+  tags:
+    - dev-openshift
+  only:
+    - develop
+  dependencies:
+    - build
+  script:
+    - mvn checkstyle:checkstyle -Dspotbugs.skip=true
+    - mvn compile spotbugs:check -Dcheckstyle.skip
+  artifacts:
+    when: always
+    name: "static-test-report"
+    paths:
+      - ./**/target/site
+      - ./**/target/spotbugs*
+      - ./**/target/checkstyle*
+
+unit-test:
+  image: $RUNNER_IMAGE
+  stage: testing
+  retry: 2
+  tags:
+    - dev-openshift
+  only:
+    - develop
+  dependencies:
+    - build
+  script:
+    - mvn test -Dspotbugs.skip=true -Dcheckstyle.skip
+    - mvn surefire-report:report -Dspotbugs.skip=true -Dcheckstyle.skip
+  artifacts:
+    when: always
+    name: "unit-test-report"
+    paths:
+      - ./**/target/site
+      - ./**/target/surefire-reports
+
+
+integration-test:
+  image: $RUNNER_IMAGE
+  stage: testing
+  retry: 2
+  tags:
+    - dev-openshift
+  only:
+    - develop
+  dependencies:
+    - build
+  script:
+    - mvn failsafe:integration-test -Dspotbugs.skip=true -Dcheckstyle.skip
+    - mvn surefire-report:report -Dspotbugs.skip=true -Dcheckstyle.skip
+  artifacts:
+    when: always
+    name: "integration-test-report"
+    paths:
+      - ./**/target/site
+      - ./**/target/surefire-reports
+
+
+review-and-image-to-deploy:
+  image: $BUILDER_IMAGE
+  stage: review-artifact
+  retry: 2
+  only:
+    - develop
+  tags:
+    - dev-openshift
+  dependencies:
+    - build
+  script:
+    - export CERTIFICATE_FOLDER="/tmp/certificates"
+    - echo $CERTIFICATE_FOLDER
+    - mkdir -p "$CERTIFICATE_FOLDER"
+    - echo "$CERTIFICATE" > /tmp/certificates/ca.crt
+    - docker login -u $DOCKER_USER --password $DOCKER_PASSWORD docker.io
+    - export BUILDAH_FORMAT=docker
+    - buildah bud --isolation chroot -f Dockerfile -t $ARTIFACT_URL .
+    - mkdir $RUNNER_IMAGE
+    - mkdir -p ./security-test-report/
+    - buildah push $ARTIFACT_URL oci:/$RUNNER_IMAGE
+    - TRIVY_TEMP_DIR=$(mktemp -d)
+    - trivy --cache-dir $TRIVY_TEMP_DIR image --download-db-only
+    - tar -cf ./db.tar.gz -C $TRIVY_TEMP_DIR/db metadata.json trivy.db
+    - trivy image --insecure --timeout 60m --exit-code 1 --no-progress --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --input /$RUNNER_IMAGE | ansi2html > ./security-test-report/security-report.html
+    - podman login --cert-dir="$CERTIFICATE_FOLDER" --username $GITLAB_USERNAME --password $REGISTRY_PASSWORD_DEVELOP "https://${REGISTRY_SERVER}"
+    - podman push --cert-dir="$CERTIFICATE_FOLDER" $ARTIFACT_URL
+    - podman save $ARTIFACT_URL
+  artifacts:
+    when: always
+    name: image-security-test-report
+    paths:
+      - ./security-test-report/security-report.html
+
+
+release:
+  image: $DEPLOY_IMAGE
+  stage: deploy
+  retry: 2
+  only:
+    - develop
+  tags:
+    - dev-openshift
+  dependencies: []
+  script:
+    - echo "$CERTIFICATE" > /usr/local/share/ca-certificates/ca.crt
+    - update-ca-certificates
+    - git config --global http.sslVerify false
+    - git config --global user.email $GITLAB_EMAIL
+    - git config --global user.name $GITLAB_USERNAME
+    - cd ..
+    - git clone --single-branch --branch $MANIFESTS_BRANCH $MANIFESTS_REPO
+    - cd $MANIFESTS_DIR
+    - 'sed -i "s@appVersion: .*@appVersion: $VERSION@" Chart.yaml'
+    - 'git commit -am "Update appVersion in $MANIFESTS_BRANCH, with tag: $VERSION" || "Nothing to commit " '
+    - git push || true
+
+
+force:
+  image: $RUNNER_IMAGE_ARGO
+  stage: sync
+  retry: 2
+  only:
+    - develop
+  tags:
+    - dev-openshift
+  dependencies: []
+  script:
+    - argocd login $ARGOCD_URL --insecure --username $ARGOCD_USER --password $ARGOCD_PASSWORD_DEV
+    - argocd app sync --force $APPLICATION_NAME
+    - argocd logout $ARGOCD_URL
+  allow_failure: true
